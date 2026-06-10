@@ -1,0 +1,202 @@
+import { useState } from 'react'
+import { format } from 'date-fns'
+import { es } from 'date-fns/locale'
+import toast from 'react-hot-toast'
+import { supabase } from '../lib/supabase'
+
+const SCHOOLS = ['Arquitectura','Derecho','Diseño','Educación','Enfermería','Ingeniería Comercial','Medicina','Nutrición','Psicología','Tecnología Médica','Trabajo Social']
+const YEARS = ['1er año','2do año','3er año','4to año','5to año','6to año']
+const ROLES = ['Docente','Director de carrera','Jefe de departamento','Coordinador académico']
+
+export default function BookingModal({ slot, date, workshops, existingBookings, onSuccess, onCancel }) {
+  const [step, setStep] = useState('form')
+  const [loading, setLoading] = useState(false)
+  const [form, setForm] = useState({ workshop_id:'', school:'', career:'', year:'', student_count:'', reason:'', room_type:'', own_room_name:'', requester_name:'', requester_email:'', requester_role:'' })
+  const [errors, setErrors] = useState({})
+  const [duplicateWarning, setDuplicateWarning] = useState(false)
+
+  function set(field, value) {
+    const newForm = { ...form, [field]: value }
+    setForm(newForm)
+    setErrors(e => ({ ...e, [field]:'' }))
+    if (['workshop_id','career','year'].includes(field)) {
+      const exists = existingBookings.some(b => b.workshop_id===newForm.workshop_id && b.career?.toLowerCase()===newForm.career?.toLowerCase() && b.year===newForm.year && b.status!=='rejected')
+      setDuplicateWarning(!!newForm.workshop_id && !!newForm.career && !!newForm.year && exists)
+    }
+  }
+
+  function validate() {
+    const e = {}
+    if (!form.workshop_id) e.workshop_id = 'Selecciona un taller'
+    if (!form.school) e.school = 'Selecciona una escuela'
+    if (!form.career.trim()) e.career = 'Ingresa la carrera'
+    if (!form.year) e.year = 'Selecciona el año'
+    if (!form.student_count || parseInt(form.student_count)<1) e.student_count = 'Ingresa la cantidad'
+    if (!form.room_type) e.room_type = 'Selecciona el tipo de espacio'
+    if (form.room_type==='own_room' && !form.own_room_name.trim()) e.own_room_name = 'Indica la sala'
+    if (!form.requester_name.trim()) e.requester_name = 'Ingresa tu nombre'
+    if (!form.requester_email.trim()) e.requester_email = 'Ingresa tu correo'
+    if (!form.requester_role) e.requester_role = 'Selecciona tu cargo'
+    setErrors(e)
+    return Object.keys(e).length === 0
+  }
+
+  async function submit() {
+    setLoading(true)
+    const isInstant = form.room_type === 'own_room'
+    const { error } = await supabase.from('bookings').insert({
+      workshop_id: form.workshop_id, availability_id: slot.id,
+      school: form.school, career: form.career.trim(), year: form.year,
+      student_count: parseInt(form.student_count), reason: form.reason.trim()||null,
+      room_type: form.room_type, own_room_name: form.room_type==='own_room'?form.own_room_name.trim():null,
+      requester_name: form.requester_name.trim(), requester_email: form.requester_email.trim().toLowerCase(), requester_role: form.requester_role,
+      status: isInstant?'approved':'pending', confirmed_at: isInstant?new Date().toISOString():null,
+    })
+    if (error) { toast.error('Error al enviar. Intenta de nuevo.'); setLoading(false); return }
+    setStep('done')
+    setLoading(false)
+  }
+
+  const selectedWorkshop = workshops.find(w => w.id===form.workshop_id)
+  const isInstant = form.room_type === 'own_room'
+  const dateLabel = format(date,"EEEE d 'de' MMMM yyyy",{locale:es})
+  const timeLabel = `${slot.slot_start.slice(0,5)} – ${slot.slot_end.slice(0,5)}`
+  const gcLink = selectedWorkshop ? `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(selectedWorkshop.name)}&dates=${format(date,'yyyyMMdd')}T${slot.slot_start.replace(':','')}00/${format(date,'yyyyMMdd')}T${slot.slot_end.replace(':','')}00&details=${encodeURIComponent(`Carrera: ${form.career}\nEscuela: ${form.school}\nAño: ${form.year}\nEstudiantes: ${form.student_count}`)}` : '#'
+
+  if (step==='done') return (
+    <div style={{ marginTop:'1rem', padding:'1.25rem', background:'var(--teal-light)', borderRadius:'var(--radius-md)', border:'1px solid var(--teal-mid)' }}>
+      <h3 style={{ fontSize:15, fontWeight:600, color:'var(--teal-dark)', marginBottom:8 }}>
+        {isInstant ? '✓ Taller confirmado' : '✓ Solicitud enviada'}
+      </h3>
+      <p style={{ fontSize:13, color:'var(--teal-dark)', lineHeight:1.6, marginBottom:12 }}>
+        {isInstant ? `Taller confirmado para el ${dateLabel} de ${timeLabel}. Recibirás confirmación en ${form.requester_email}.` : `Solicitud recibida. Las psicólogas la revisarán y recibirás respuesta en ${form.requester_email}.`}
+      </p>
+      <button className="btn btn-secondary" onClick={onSuccess} style={{ fontSize:13 }}>Volver al calendario</button>
+    </div>
+  )
+
+  if (step==='confirm') return (
+    <div style={{ marginTop:'1rem' }}>
+      <div style={{ padding:'1rem', background:'var(--surface)', borderRadius:'var(--radius-md)', border:'1px solid var(--border)', marginBottom:'1rem', fontSize:13 }}>
+        <div style={{ fontWeight:600, marginBottom:8 }}>Resumen de la reserva</div>
+        {[['Taller',selectedWorkshop?.name],['Fecha',`${dateLabel} · ${timeLabel}`],['Carrera',`${form.career} – ${form.year}`],['Escuela',form.school],['Estudiantes',form.student_count],['Espacio',form.room_type==='own_room'?`Sala: ${form.own_room_name}`:'Cowork bienestar'],['Solicitante',`${form.requester_name} (${form.requester_role})`]].map(([k,v]) => (
+          <div key={k} style={{ display:'flex', justifyContent:'space-between', padding:'4px 0', borderBottom:'1px solid var(--border)' }}>
+            <span style={{ color:'var(--slate-mid)' }}>{k}</span>
+            <span style={{ fontWeight:500, textAlign:'right', maxWidth:'60%' }}>{v}</span>
+          </div>
+        ))}
+      </div>
+      {isInstant && <a href={gcLink} target="_blank" rel="noopener noreferrer" style={{ display:'inline-flex', alignItems:'center', gap:6, fontSize:13, color:'var(--teal)', textDecoration:'none', marginBottom:12, fontWeight:500 }}>📅 Añadir a Google Calendar</a>}
+      {!isInstant && <div style={{ padding:'10px 12px', background:'var(--warning-light)', border:'1px solid #e8d5a3', borderRadius:'var(--radius-sm)', fontSize:13, color:'var(--warning)', marginBottom:12 }}><strong>Pendiente de aprobación.</strong> La confirmación llegará por correo.</div>}
+      <div style={{ display:'flex', gap:8 }}>
+        <button className="btn btn-secondary" onClick={() => setStep('form')} style={{ flex:1 }}>Editar</button>
+        <button className="btn btn-primary" onClick={submit} disabled={loading} style={{ flex:2, justifyContent:'center' }}>
+          {loading ? <><span className="spinner" />Enviando...</> : isInstant ? 'Confirmar reserva' : 'Enviar solicitud'}
+        </button>
+      </div>
+    </div>
+  )
+
+  return (
+    <div style={{ marginTop:'1rem', borderTop:'1px solid var(--border)', paddingTop:'1rem' }}>
+      <h4 style={{ fontSize:14, fontWeight:600, marginBottom:'1rem' }}>Reservar este horario</h4>
+      {duplicateWarning && <div style={{ padding:'10px 12px', background:'var(--warning-light)', border:'1px solid #e8d5a3', borderRadius:'var(--radius-sm)', fontSize:13, color:'var(--warning)', marginBottom:12 }}><strong>Atención:</strong> Este taller ya fue agendado para {form.career} {form.year}. Recuerda unificar secciones.</div>}
+      
+      <div className="form-group">
+        <label>Taller</label>
+        <select value={form.workshop_id} onChange={e => set('workshop_id',e.target.value)}>
+          <option value="">Seleccionar taller...</option>
+          {workshops.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+        </select>
+        {errors.workshop_id && <span className="error-msg">{errors.workshop_id}</span>}
+      </div>
+
+      <div className="form-group">
+        <label>Tipo de espacio</label>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+          {[{v:'own_room',l:'Sala propia',d:'Confirmación inmediata'},{v:'cowork',l:'Cowork bienestar',d:'Sujeto a aprobación'}].map(opt => (
+            <div key={opt.v} onClick={() => set('room_type',opt.v)} style={{ padding:'10px 12px', border:`1.5px solid ${form.room_type===opt.v?'var(--teal)':'var(--border)'}`, borderRadius:'var(--radius-sm)', cursor:'pointer', background:form.room_type===opt.v?'var(--teal-light)':'var(--white)', transition:'all 0.1s' }}>
+              <div style={{ fontSize:13, fontWeight:600, color:form.room_type===opt.v?'var(--teal-dark)':'var(--slate)', marginBottom:2 }}>{opt.l}</div>
+              <div style={{ fontSize:11, color:form.room_type===opt.v?'var(--teal)':'var(--slate-light)' }}>{opt.d}</div>
+            </div>
+          ))}
+        </div>
+        {errors.room_type && <span className="error-msg">{errors.room_type}</span>}
+      </div>
+
+      {form.room_type==='own_room' && (
+        <div className="form-group">
+          <label>Nombre de la sala</label>
+          <input placeholder="Ej: Sala C-201" value={form.own_room_name} onChange={e => set('own_room_name',e.target.value)} />
+          {errors.own_room_name && <span className="error-msg">{errors.own_room_name}</span>}
+        </div>
+      )}
+
+      <div className="form-row-2">
+        <div className="form-group">
+          <label>Escuela</label>
+          <select value={form.school} onChange={e => set('school',e.target.value)}>
+            <option value="">Seleccionar...</option>
+            {SCHOOLS.map(s => <option key={s}>{s}</option>)}
+          </select>
+          {errors.school && <span className="error-msg">{errors.school}</span>}
+        </div>
+        <div className="form-group">
+          <label>Carrera</label>
+          <input placeholder="Ej: Enfermería" value={form.career} onChange={e => set('career',e.target.value)} />
+          {errors.career && <span className="error-msg">{errors.career}</span>}
+        </div>
+      </div>
+
+      <div className="form-row-2">
+        <div className="form-group">
+          <label>Año</label>
+          <select value={form.year} onChange={e => set('year',e.target.value)}>
+            <option value="">Seleccionar...</option>
+            {YEARS.map(y => <option key={y}>{y}</option>)}
+          </select>
+          {errors.year && <span className="error-msg">{errors.year}</span>}
+        </div>
+        <div className="form-group">
+          <label>Cantidad de estudiantes</label>
+          <input type="number" min="1" placeholder="Ej: 35" value={form.student_count} onChange={e => set('student_count',e.target.value)} />
+          {errors.student_count && <span className="error-msg">{errors.student_count}</span>}
+        </div>
+      </div>
+
+      <div className="form-group">
+        <label>Motivo <span style={{ color:'var(--slate-light)', fontWeight:400 }}>(opcional)</span></label>
+        <textarea rows={2} placeholder="Ej: semana de bienvenida..." value={form.reason} onChange={e => set('reason',e.target.value)} />
+      </div>
+
+      <hr className="divider" />
+      <div style={{ fontSize:13, fontWeight:600, marginBottom:10 }}>Datos del solicitante</div>
+
+      <div className="form-group">
+        <label>Nombre completo</label>
+        <input placeholder="Ej: María González" value={form.requester_name} onChange={e => set('requester_name',e.target.value)} />
+        {errors.requester_name && <span className="error-msg">{errors.requester_name}</span>}
+      </div>
+
+      <div className="form-row-2">
+        <div className="form-group">
+          <label>Correo institucional</label>
+          <input type="email" placeholder="nombre@uft.cl" value={form.requester_email} onChange={e => set('requester_email',e.target.value)} />
+          {errors.requester_email && <span className="error-msg">{errors.requester_email}</span>}
+        </div>
+        <div className="form-group">
+          <label>Cargo</label>
+          <select value={form.requester_role} onChange={e => set('requester_role',e.target.value)}>
+            <option value="">Seleccionar...</option>
+            {ROLES.map(r => <option key={r}>{r}</option>)}
+          </select>
+          {errors.requester_role && <span className="error-msg">{errors.requester_role}</span>}
+        </div>
+      </div>
+
+      <button className="btn btn-primary" style={{ width:'100%', justifyContent:'center', marginTop:4 }} onClick={() => { if(validate()) setStep('confirm') }}>
+        Revisar reserva →
+      </button>
+    </div>
+  )
+}
